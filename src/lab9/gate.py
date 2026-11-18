@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from statistics import mean
 
 from lab8.console import utf8_stdio
 from lab9 import stats
@@ -44,8 +45,49 @@ def slice_check(pr: dict, base: dict, spec: dict) -> tuple[list[str], list[str]]
       - fail if below "min", or if no_significant_drop and the paired CI over the slice's items
         lies entirely below 0
     Return (blocked ids like "slice:money_movement/pass_rate", report lines)."""
-    # TODO M5
-    return [], []
+    blocked, lines = [], []
+    bootstrap = spec.get("bootstrap", {})
+    confidence = bootstrap.get("confidence", 0.95)
+    for rule in spec.get("slices", []):
+        name, metric = rule["name"], rule["metric"]
+        check_id = f"slice:{name}/{metric}"
+        candidate = per_item(pr, metric, slice_name=name)
+        floor = rule.get("min")
+        value = mean(candidate.values()) if candidate else None
+        failed = value is None or (floor is not None and value < floor)
+        details = [f"value={value:.4f}" if value is not None else "missing slice scores"]
+        if floor is not None:
+            details.append(f"min={floor:g}")
+
+        if rule.get("no_significant_drop") and candidate:
+            baseline = per_item(base, metric, slice_name=name)
+            keys = sorted(candidate.keys() & baseline.keys())
+            if keys:
+                if len(keys) == 1:
+                    # Every resample of a single pair has the observed difference.
+                    key = keys[0]
+                    delta = low = high = candidate[key] - baseline[key]
+                else:
+                    delta, low, high = stats.paired_bootstrap(
+                        [candidate[key] for key in keys],
+                        [baseline[key] for key in keys],
+                        n_resamples=bootstrap.get("n_resamples", 1000),
+                        rng=bootstrap.get("rng", 2027),
+                        confidence=confidence,
+                    )
+                details.append(f"Δ {delta:+.3f} CI [{low:+.3f}, {high:+.3f}]")
+                failed = failed or high < 0
+            else:
+                details.append("no paired slice scores")
+                failed = True
+
+        verdict = "ok"
+        if failed:
+            verdict = "BLOCK" if rule.get("blocking") else "warn"
+            if rule.get("blocking"):
+                blocked.append(check_id)
+        lines.append(f"  {check_id} {' · '.join(details)} {verdict}")
+    return blocked, lines
 
 
 def check(pr: dict, base: dict, spec: dict, base_spec: dict | None = None) -> tuple[list[str], list[str]]:
