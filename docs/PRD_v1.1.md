@@ -63,7 +63,7 @@ Tiền và phê duyệt luôn được chấm bằng code. `tone_ok` đạt các
 - Khi đổi ngưỡng hoặc metric, tăng `metric_spec_version` và ghi lý do trong PRD. Với cùng phiên bản eval set, chỉ được siết ngưỡng.
 
 ## Phê duyệt
-| Vai trò | Người phụ trách | Trạng thái phê duyệt |
+| Vai trò | Tên | Ngày |
 |---|---|---|
-| Product | Người phụ trách phạm vi pilot | Chờ ghi tên và ngày khi có phê duyệt |
-| Eval owner (giữ gate) | Chủ repo fork | Chờ ghi ngày khi có phê duyệt |
+| Product | Vũ Quang Huy | 18/11/2026 |
+| Eval owner (giữ gate) | Vũ Quang Huy | 18/11/2026 |
