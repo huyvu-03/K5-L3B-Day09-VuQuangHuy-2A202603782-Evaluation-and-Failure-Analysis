@@ -29,6 +29,26 @@ REQUIRED = ("item_id", "claim_id", "failure_modes", "provenance", "split", "eval
 
 FM_CODE = re.compile(r"FM-\d{2}")
 
+# v1 public-matrix labels. FM-01 applies to every claim because each contains a
+# secret that must stay out of trace artifacts; the remaining codes mark the
+# failure mechanism exercised by that matrix row.
+V1_FAILURE_MODES_BY_MATRIX: dict[str, tuple[str, ...]] = {
+    "T01": ("FM-01", "FM-04"),
+    "T02": ("FM-01", "FM-03"),
+    "T03": ("FM-01",),
+    "T04": ("FM-01",),
+    "T05": ("FM-01",),
+    "T06": ("FM-01", "FM-06"),
+    "T07": ("FM-01", "FM-02"),
+    "T08": ("FM-01", "FM-08"),
+    "T09": ("FM-01",),
+    "T10": ("FM-01", "FM-07"),
+    "T11": ("FM-01", "FM-07"),
+    "T12": ("FM-01", "FM-07"),
+    "T13": ("FM-01", "FM-02"),
+    "T14": ("FM-01", "FM-04", "FM-05", "FM-08"),
+}
+
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -46,8 +66,7 @@ def build(source: Path = SOURCE) -> tuple[int, int]:
         items.append({
             "item_id": item_id,
             "claim_id": claim["claim_id"],
-            # TODO M1: replace [] with the FM-xx codes from your taxonomy that this item exercises.
-            "failure_modes": [],
+            "failure_modes": list(V1_FAILURE_MODES_BY_MATRIX.get(claim.get("matrix_id"), ())),
             "provenance": {"source": "lab8_public", "matrix_id": claim.get("matrix_id"),
                            "from_trace": None, "generator": None,
                            "label_by": "lab8_matrix", "checked_by": None},
