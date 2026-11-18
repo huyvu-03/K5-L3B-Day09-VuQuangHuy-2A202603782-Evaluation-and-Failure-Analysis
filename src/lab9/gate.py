@@ -11,12 +11,55 @@ from __future__ import annotations
 
 import argparse
 import json
+from math import isfinite
 from pathlib import Path
 from statistics import mean
 
 from lab8.console import utf8_stdio
 from lab9 import stats
 from lab9.eval import SPEC, load_spec, per_item
+from lab9.graders import GRADERS
+
+
+def _is_finite_score(value: object) -> bool:
+    return isinstance(value, int) or (isinstance(value, float) and isfinite(value))
+
+
+def _ratchet_check(spec: dict, base_spec: dict) -> list[str]:
+    """Compare each existing metric and slice rule with its replacement."""
+    problems = []
+    rules = {metric["id"]: metric for metric in spec.get("metrics", [])}
+    old_rules = {metric["id"]: metric for metric in base_spec.get("metrics", [])}
+    for rule_set, indexed in ((spec, rules), (base_spec, old_rules)):
+        for rule in rule_set.get("slices", []):
+            indexed[f"slice:{rule['name']}/{rule['metric']}"] = {
+                "blocking": rule.get("blocking"),
+                "threshold": rule,
+            }
+
+    for rule_id, old_rule in old_rules.items():
+        rule = rules.get(rule_id)
+        if rule is None:
+            problems.append(f"ratchet: removed {rule_id}")
+            continue
+        if old_rule.get("blocking") and not rule.get("blocking"):
+            problems.append(f"ratchet: {rule_id} no longer blocks")
+
+        old_threshold = old_rule.get("threshold", {})
+        threshold = rule.get("threshold", {})
+        for key in ("min", "max", "max_increase"):
+            if key not in old_threshold:
+                continue
+            value = threshold.get(key)
+            if value is None:
+                problems.append(f"ratchet: removed {rule_id} {key} threshold")
+                continue
+            old_value = old_threshold[key]
+            if not _is_finite_score(value) or (value < old_value if key == "min" else value > old_value):
+                problems.append(f"ratchet: loosened {rule_id} {key} threshold")
+        if old_threshold.get("no_significant_drop") and not threshold.get("no_significant_drop"):
+            problems.append(f"ratchet: removed {rule_id} no_significant_drop")
+    return problems
 
 
 def integrity_check(pr: dict, base: dict, spec: dict, base_spec: dict | None = None) -> list[str]:
@@ -34,8 +77,53 @@ def integrity_check(pr: dict, base: dict, spec: dict, base_spec: dict | None = N
         including dropping no_significant_drop)
       - an item's slice tags in PR rows differ from the baseline's (relabelling an item out of a
         slice hides its regression from the slice gate)"""
-    # TODO M7
-    return []
+    problems = []
+    for metric, value in pr["metrics"].items():
+        if value is not None and not _is_finite_score(value):
+            problems.append(f"invalid or non-finite metric: {metric}")
+    if pr.get("evaluator_failures"):
+        problems.append(f"evaluator_failures: {len(pr['evaluator_failures'])}")
+
+    rows = pr["rows"]
+    manifest = pr["manifest"]
+    seeds = manifest["seeds"]
+    expected_count = manifest["items"] * len(seeds)
+    if len(rows) != expected_count:
+        problems.append(f"row count {len(rows)} != manifest count {expected_count}")
+
+    pairs = {(row["item_id"], row["seed"]) for row in rows}
+    base_slices = {
+        (row["item_id"], row["seed"]): set(row.get("slices") or ())
+        for row in base["rows"]
+    }
+    if len(pairs) != len(rows):
+        problems.append("duplicate (item_id, seed) rows")
+    if pairs != base_slices.keys():
+        problems.append("(item_id, seed) coverage differs from baseline")
+    if (
+        len(set(seeds)) != len(seeds)
+        or {seed for _, seed in pairs} != set(seeds)
+        or len({item for item, _ in pairs}) != manifest["items"]
+    ):
+        problems.append("row coverage differs from manifest items or seeds")
+
+    graded_metrics = [entry["id"] for entry in spec.get("metrics", []) if entry["id"] in GRADERS]
+    changed_items = set()
+    for row in rows:
+        item, seed = row["item_id"], row["seed"]
+        pair = (item, seed)
+        if pair in base_slices and set(row.get("slices") or ()) != base_slices[pair]:
+            changed_items.add(item)
+        for metric in graded_metrics:
+            score = row.get(metric)
+            if not _is_finite_score(score):
+                problems.append(f"{item}@{seed}: missing or invalid score for {metric}")
+    for item in sorted(changed_items):
+        problems.append(f"{item}: slice tags differ from baseline")
+
+    if base_spec is not None and spec.get("eval_set_version") == base_spec.get("eval_set_version"):
+        problems.extend(_ratchet_check(spec, base_spec))
+    return problems
 
 
 def slice_check(pr: dict, base: dict, spec: dict) -> tuple[list[str], list[str]]:
